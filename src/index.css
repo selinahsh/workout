@@ -1,0 +1,9 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* 確保手機版面不會亂跑 */
+body {
+  background-color: black;
+  overscroll-behavior: none;
+}
