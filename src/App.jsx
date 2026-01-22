@@ -320,7 +320,7 @@ export default function App() {
               </button>
               
               {/* Calendar Header */}
-              <div className="flex items-center justify-between mb-6 px-2">
+              <div className="flex items-center justify-between mb-6 px-2 mt-8">
                 <button onClick={() => changeMonth(-1)} className="p-2 rounded-full hover:bg-white/10 text-white/60 hover:text-white">
                   <ChevronLeft size={24} />
                 </button>
