@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Check, Calendar as CalendarIcon, Edit3, Save, X, ChevronLeft, ChevronRight, Trophy, Activity, Dumbbell } from 'lucide-react';
+import { Check, Calendar as CalendarIcon, Edit3, Save, X, ChevronLeft, ChevronRight, Trophy, Activity, Dumbbell, MapPin } from 'lucide-react';
 
 // --- CONFIGURATION ---
 const FONT_LINK = "https://fonts.googleapis.com/css2?family=Libre+Baskerville:ital,wght@0,400;0,700;1,400&display=swap";
@@ -42,7 +42,7 @@ const INITIAL_WEEKLY_PLAN = {
 const DAYS_ORDER = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 const DAY_ABBREVIATIONS = { Monday: 'Mon', Tuesday: 'Tue', Wednesday: 'Wed', Thursday: 'Thu', Friday: 'Fri', Saturday: 'Sat', Sunday: 'Sun' };
 const WEEK_HEADERS = ['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su'];
-const getStorageKey = (key) => `gym_app_v4_${key}`; // 升級版本號避免舊資料衝突
+const getStorageKey = (key) => `gym_app_v5_${key}`; // 升級版本號
 const getLocalISODate = (dateObj) => {
   const offset = dateObj.getTimezoneOffset() * 60000;
   return new Date(dateObj.getTime() - offset).toISOString().split('T')[0];
@@ -56,9 +56,10 @@ export default function App() {
   
   // 該日期的狀態
   const [completedItems, setCompletedItems] = useState([]);
-  const [isDayFinished, setIsDayFinished] = useState(false); // 該日是否已按「完成」
+  const [isDayFinished, setIsDayFinished] = useState(false);
+  const [todayKm, setTodayKm] = useState(""); // 新增：今日公里數輸入 (字串方便輸入小數點)
 
-  // 歷史大數據: { '2026-01-22': { doneItems: [], isFinished: true, type: 'gym' } }
+  // 歷史大數據: { '2026-01-22': { doneItems: [], isFinished: true, type: 'gym', km: 5.2 } }
   const [history, setHistory] = useState({}); 
   
   const [isEditing, setIsEditing] = useState(false);
@@ -71,7 +72,7 @@ export default function App() {
   const displayDateTitle = viewDate.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
   const currentPlan = planData[viewDayName] || planData.Monday;
 
-  // 判斷當天類型：Gym 還是 Cardio？
+  // 判斷當天類型
   const isCardioDay = useMemo(() => {
     const title = currentPlan.title.toLowerCase();
     return title.includes("cardio") || title.includes("run") || title.includes("active");
@@ -88,24 +89,32 @@ export default function App() {
 
   // --- 切換日期時載入數據 ---
   useEffect(() => {
-    if (history[viewDateString]) {
-      setCompletedItems(history[viewDateString].doneItems || []);
-      setIsDayFinished(history[viewDateString].isFinished || false);
+    const record = history[viewDateString];
+    if (record) {
+      setCompletedItems(record.doneItems || []);
+      setIsDayFinished(record.isFinished || false);
+      setTodayKm(record.km ? record.km.toString() : ""); // 載入公里數
     } else {
       setCompletedItems([]);
       setIsDayFinished(false);
+      setTodayKm("");
     }
   }, [viewDateString, history]);
 
-  // --- 儲存邏輯 ---
-  const updateHistory = (newCompletedItems, newIsFinished) => {
+  // --- 核心儲存邏輯 ---
+  const updateHistory = (newCompletedItems, newIsFinished, newKm) => {
     setCompletedItems(newCompletedItems);
     setIsDayFinished(newIsFinished);
+    setTodayKm(newKm);
+
+    // 確保公里數轉為數字儲存
+    const kmValue = parseFloat(newKm); 
 
     const newEntry = {
       doneItems: newCompletedItems,
       isFinished: newIsFinished,
-      type: isCardioDay ? 'cardio' : 'gym', // 自動記錄類型
+      type: isCardioDay ? 'cardio' : 'gym',
+      km: isNaN(kmValue) ? 0 : kmValue, // 存入數字
       lastUpdated: new Date().toISOString()
     };
 
@@ -114,23 +123,27 @@ export default function App() {
     localStorage.setItem(getStorageKey('history'), JSON.stringify(newHistory));
   };
 
-  // 勾選單項
+  // 處理公里數輸入
+  const handleKmChange = (val) => {
+    setTodayKm(val);
+    // 即時存檔，但不改變完成狀態
+    updateHistory(completedItems, isDayFinished, val);
+  };
+
   const toggleItem = (id) => {
     if (!isEditing) {
       const newItems = completedItems.includes(id)
         ? completedItems.filter(item => item !== id)
         : [...completedItems, id];
-      updateHistory(newItems, isDayFinished); // 保持完成狀態不變
+      updateHistory(newItems, isDayFinished, todayKm);
     }
   };
 
-  // 勾選整日完成 (最下方的按鈕)
   const toggleDayFinish = () => {
     const newStatus = !isDayFinished;
-    updateHistory(completedItems, newStatus);
+    updateHistory(completedItems, newStatus, todayKm);
   };
 
-  // 修改課表
   const updateExercise = (id, field, value) => {
     const currentItems = planData[viewDayName].items;
     const newItems = currentItems.map(item => 
@@ -143,22 +156,31 @@ export default function App() {
 
   const progress = currentPlan.items.length === 0 ? 100 : Math.round((completedItems.length / currentPlan.items.length) * 100);
 
-  // --- 月曆統計邏輯 ---
+  // --- 月曆統計邏輯 (修改重點) ---
   const getMonthStats = () => {
     let gymDays = 0;
-    let runDays = 0;
+    let totalKm = 0; // 改為計算總里程
     const currentYear = calendarNavDate.getFullYear();
     const currentMonth = calendarNavDate.getMonth();
 
     Object.keys(history).forEach(dateStr => {
       const d = new Date(dateStr);
-      // 確保是這個月份且已按完成
-      if (d.getFullYear() === currentYear && d.getMonth() === currentMonth && history[dateStr].isFinished) {
-        if (history[dateStr].type === 'cardio') runDays++;
-        else gymDays++;
+      const record = history[dateStr];
+      
+      // 確保是這個月份
+      if (d.getFullYear() === currentYear && d.getMonth() === currentMonth) {
+        if (record.isFinished) {
+          // 只有按了完成才算天數
+          if (record.type !== 'cardio') gymDays++;
+        }
+        // 只要有輸入里程就加總 (不一定要按完成，但通常會按)
+        if (record.type === 'cardio' && record.km) {
+          totalKm += record.km;
+        }
       }
     });
-    return { gymDays, runDays };
+    // 取小數點後一位
+    return { gymDays, totalKm: parseFloat(totalKm.toFixed(1)) };
   };
   
   const monthStats = useMemo(getMonthStats, [history, calendarNavDate]);
@@ -219,6 +241,27 @@ export default function App() {
              {currentPlan.title}
           </div>
 
+          {/* KM 輸入框 (僅在跑步日顯示) */}
+          {isCardioDay && !isEditing && (
+            <div className="mb-6 p-5 bg-blue-900/10 border border-blue-500/20 rounded-[24px] backdrop-blur-md relative overflow-hidden">
+               <div className="absolute -right-5 -top-5 text-blue-500/10 rotate-12">
+                 <MapPin size={100} />
+               </div>
+               <label className="text-blue-300 text-[10px] font-bold tracking-widest uppercase mb-1 block">Distance Run</label>
+               <div className="flex items-end gap-2 relative z-10">
+                  <input
+                    type="number"
+                    inputMode="decimal"
+                    value={todayKm}
+                    onChange={(e) => handleKmChange(e.target.value)}
+                    className="bg-transparent text-5xl font-bold text-white outline-none w-40 border-b border-blue-500/50 focus:border-blue-400 placeholder-white/10 font-sans"
+                    placeholder="0.0"
+                  />
+                  <span className="text-lg text-blue-400 font-bold mb-3 tracking-widest">KM</span>
+               </div>
+            </div>
+          )}
+
           <div className="flex justify-between bg-white/5 backdrop-blur-2xl border border-white/10 rounded-2xl p-1.5 shadow-2xl">
             {DAYS_ORDER.map((d) => (
               <div key={d} className={`w-10 h-10 rounded-xl text-xs font-bold transition-all flex items-center justify-center ${viewDayName === d ? 'bg-white text-black shadow-lg scale-110' : 'text-white/20'}`}>
@@ -228,10 +271,10 @@ export default function App() {
           </div>
         </header>
 
-        {/* PROGRESS BAR */}
-        {!isEditing && (
+        {/* PROGRESS BAR (僅在非跑步日或編輯模式顯示，因為跑步日有大輸入框了) */}
+        {!isEditing && !isCardioDay && (
           <div className="mb-6 relative h-24 p-6 bg-gradient-to-br from-white/10 to-transparent backdrop-blur-3xl border border-white/10 rounded-[24px] overflow-hidden flex items-end shadow-2xl">
-            <div className={`absolute top-0 bottom-0 left-0 transition-all duration-1000 ease-out blur-3xl ${isDayFinished ? 'bg-green-500/40 w-full' : 'bg-blue-500/30'}`} style={{ width: isDayFinished ? '100%' : `${progress}%` }}></div>
+            <div className={`absolute top-0 bottom-0 left-0 transition-all duration-1000 ease-out blur-3xl ${isDayFinished ? 'bg-green-500/40 w-full' : 'bg-red-500/20'}`} style={{ width: isDayFinished ? '100%' : `${progress}%` }}></div>
             <div className="relative z-10 w-full flex justify-between items-end">
               <div>
                 <div className="text-4xl font-bold mb-1">{isDayFinished ? "DONE" : `${progress}%`}</div>
@@ -293,7 +336,7 @@ export default function App() {
             })
           )}
 
-          {/* FINISH BUTTON (新增部分) */}
+          {/* FINISH BUTTON */}
           {!isEditing && currentPlan.items.length > 0 && (
              <button 
                onClick={toggleDayFinish}
@@ -319,11 +362,11 @@ export default function App() {
               <div className="absolute -top-20 -right-20 w-40 h-40 bg-blue-500/20 blur-3xl rounded-full pointer-events-none"></div>
               
               {/* Close Button (Left) */}
-              <button onClick={() => setShowCalendar(false)} className="absolute top-5 right-5 p-2 text-white/40 hover:text-white transition-colors z-20">
+              <button onClick={() => setShowCalendar(false)} className="absolute top-5 left-5 p-2 text-white/40 hover:text-white transition-colors z-20">
                 <X size={24} />
               </button>
               
-              {/* Monthly Stats (新增統計) */}
+              {/* Monthly Stats (修改：右邊改為 Total KM) */}
               <div className="mt-10 mb-6 flex justify-around border-b border-white/10 pb-6">
                 <div className="text-center">
                   <div className="flex items-center justify-center gap-2 text-red-400 mb-1">
@@ -337,13 +380,13 @@ export default function App() {
                    <div className="flex items-center justify-center gap-2 text-blue-400 mb-1">
                     <Activity size={16} /> <span className="text-xs font-bold tracking-widest">RUN</span>
                   </div>
-                  <div className="text-2xl font-bold text-white">{monthStats.runDays}</div>
-                  <div className="text-[10px] text-white/30 uppercase">Days</div>
+                  <div className="text-2xl font-bold text-white">{monthStats.totalKm}</div>
+                  <div className="text-[10px] text-white/30 uppercase">Total KM</div>
                 </div>
               </div>
 
               {/* Calendar Controls */}
-              <div className="flex items-center justify-between mb-4 px-2">
+              <div className="flex items-center justify-between mb-4 px-2 mt-2">
                 <button onClick={() => changeMonth(-1)} className="p-2 rounded-full hover:bg-white/10 text-white/60 hover:text-white">
                   <ChevronLeft size={24} />
                 </button>
@@ -371,7 +414,8 @@ export default function App() {
                   const isSelected = cellDateStr === viewDateString;
                   const historyData = history[cellDateStr];
                   const isFinished = historyData?.isFinished;
-                  const type = historyData?.type; // 'gym' or 'cardio'
+                  const type = historyData?.type;
+                  const hasKm = historyData?.km > 0;
                   
                   return (
                     <button 
@@ -385,7 +429,7 @@ export default function App() {
                     >
                       {day}
                       {/* Status Indicators */}
-                      {isFinished && (
+                      {(isFinished || hasKm) && (
                         <div className={`absolute bottom-1 w-1.5 h-1.5 rounded-full ${type === 'cardio' ? 'bg-blue-500 shadow-[0_0_5px_rgba(59,130,246,0.8)]' : 'bg-red-500 shadow-[0_0_5px_rgba(239,68,68,0.8)]'}`}></div>
                       )}
                     </button>
